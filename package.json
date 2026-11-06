@@ -1,0 +1,22 @@
+{
+  "name": "ontodata",
+  "private": true,
+  "scripts": {
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "dev:api": "npm --prefix backend run dev",
+    "dev:ui": "npm --prefix frontend run dev",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "prestart": "npm run build",
+    "start": "npm --prefix backend start",
+    "ontop:drivers": "sh ontop/get-jdbc-drivers.sh",
+    "db:up": "docker compose --profile local up -d postgres",
+    "ontop:up": "docker compose up -d ontop",
+    "vectors:up": "docker compose --profile vectors up -d pgvector",
+    "graph:up": "docker compose --profile graph up -d neo4j",
+    "stack:pgvector": "docker compose --profile app --profile local --profile vectors up -d --build",
+    "stack:s3vectors": "docker compose -f docker-compose.yml -f docker-compose.s3vectors.yml --profile app --profile local up -d --build",
+    "stack:up": "docker compose --profile app --profile local --profile vectors --profile graph up -d --build",
+    "stack:down": "docker compose --profile app --profile local --profile vectors --profile graph down",
+    "eval": "node scripts/eval-retail.mjs"
+  }
+}

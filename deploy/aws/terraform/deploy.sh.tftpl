@@ -1,0 +1,63 @@
+#!/bin/bash
+# Ontodata deploy, run on the instance by SSM (bundle ${bundle_md5}).
+# Unpacks the project, starts the containers, loads the sales sample into Redshift once,
+# and points the app's connection settings at the AWS services.
+set -euo pipefail
+export PATH="$PATH:/snap/bin"
+cloud-init status --wait > /dev/null || true
+
+mkdir -p /opt/ontodata
+cd /opt/ontodata
+aws s3 cp "s3://${bucket}/${key}" /tmp/ontodata.zip --region ${region} --only-show-errors
+unzip -oq /tmp/ontodata.zip -d /opt/ontodata
+rm /tmp/ontodata.zip
+# The app container runs as uid 1000 and writes the Ontop files here.
+mkdir -p ontop/input
+chown -R 1000:1000 ontop/input
+ls ontop/jdbc/*.jar > /dev/null 2>&1 || sh ontop/get-jdbc-drivers.sh
+[ -f .env ] || echo "AWS_REGION=${region}" > .env
+
+docker compose -f docker-compose.aws.yml up -d --build
+for i in $(seq 1 60); do curl -sf localhost:4000/api/config > /dev/null && break; sleep 5; done
+curl -sf localhost:4000/api/config > /dev/null
+
+# ---------- Sales sample in Redshift (once) ----------
+psqlrs() {
+  docker run --rm -i -e PGPASSWORD='${redshift_admin_pw}' postgres:16 \
+    psql -v ON_ERROR_STOP=1 -q "host=${redshift_host} port=5439 dbname=dev user=${redshift_admin} sslmode=require" "$@"
+}
+if [ ! -f .sample-loaded ]; then
+  psqlrs < deploy/aws/redshift-retail.sql
+  if [ -z "$(psqlrs -Atc "select 1 from pg_user where usename = 'ontodata'")" ]; then
+    psqlrs -c "create user ontodata password '${redshift_app_pw}'"
+  fi
+  psqlrs -c "grant usage on schema sales to ontodata; grant select on all tables in schema sales to ontodata;"
+  touch .sample-loaded
+fi
+echo "Redshift orders: $(psqlrs -Atc 'select count(*) from sales.orders')"
+
+# ---------- App connection settings (the LLM key is entered in the UI) ----------
+put() { curl -sf -X PUT -H 'content-type: application/json' --data-binary @- "localhost:4000/api/config/$1" > /dev/null; }
+
+put redshift <<'JSON'
+{"engine": "redshift", "host": "${redshift_host}", "port": 5439, "database": "dev", "user": "ontodata", "password": "${redshift_app_pw}", "ssl": true}
+JSON
+
+%{ if rds_host != "" ~}
+put vectorStore <<'JSON'
+{"provider": "pgvector", "indexName": "ontodata_schema", "pgHost": "${rds_host}", "pgPort": 5432, "pgDatabase": "vectors", "pgUser": "ontodata", "password": "${rds_pw}", "pgSsl": true, "region": "${region}", "bucket": "${vector_bucket}"}
+JSON
+%{ else ~}
+put vectorStore <<'JSON'
+{"provider": "s3vectors", "indexName": "ontodata-schema", "region": "${region}", "bucket": "${vector_bucket}"}
+JSON
+%{ endif ~}
+
+%{ if neptune_host != "" ~}
+put graph <<'JSON'
+{"provider": "neptune", "endpoint": "${neptune_host}", "port": 8182, "region": "${region}", "iamAuth": true}
+JSON
+%{ endif ~}
+
+docker compose -f docker-compose.aws.yml ps
+echo "Ontodata deployed."

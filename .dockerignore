@@ -1,0 +1,9 @@
+**/node_modules
+**/dist
+.git
+.claude
+backend/data
+ontop
+sample-data
+scripts
+*.md

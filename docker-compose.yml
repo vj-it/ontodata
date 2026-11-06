@@ -1,0 +1,105 @@
+services:
+  # Ontodata API + UI (Dockerfile in the repo root), on http://localhost:4000.
+  # Whole stack: npm run stack:up
+  app:
+    build: .
+    image: ontodata-app:local
+    container_name: ontodata-app
+    profiles: ["app"]
+    ports:
+      - "4000:4000"
+    environment:
+      ONTOP_URL: http://ontop:8080
+      ONTOP_CONTAINER: ontodata-ontop
+      NEO4J_URI: bolt://neo4j:7687
+      PGVECTOR_HOST: pgvector
+      PGVECTOR_PORT: "5432"
+      PGVECTOR_PASSWORD: ontodata
+      # Vector store used by this setup. docker-compose.s3vectors.yml switches it to S3 Vectors.
+      VECTOR_STORE_PROVIDER: pgvector
+      VECTOR_INDEX_NAME: ontodata_schema
+      # ANTHROPIC_API_KEY / OPENAI_API_KEY can be passed here instead of entering them on screen 1.
+    volumes:
+      - appdata:/data
+      - ./ontop/input:/ontop-input
+      # Opt-in: let "Deploy to Ontop" restart the Ontop container itself. This gives the app control
+      # of Docker on the host, so it's off by default. Ontop reloads the ontology and mapping on its own;
+      # only a database connection change needs: docker restart ontodata-ontop
+      # - /var/run/docker.sock:/var/run/docker.sock
+    # group_add:
+    #   - "${DOCKER_GID:-0}"   # socket group: 0 on Docker Desktop, the docker group's id on Linux
+    depends_on:
+      - ontop
+    restart: unless-stopped
+
+  # Ontop virtual knowledge graph endpoint over Redshift.
+  # The backend writes ontology.ttl, mapping.obda and redshift.properties into ./ontop/input.
+  ontop:
+    image: ontop/ontop:5.4.0
+    container_name: ontodata-ontop
+    ports:
+      - "8080:8080"
+    environment:
+      ONTOP_ONTOLOGY_FILE: /opt/ontop/input/ontology.ttl
+      ONTOP_MAPPING_FILE: /opt/ontop/input/mapping.obda
+      ONTOP_PROPERTIES_FILE: /opt/ontop/input/redshift.properties
+      ONTOP_DEV_MODE: "true" # reload when the ontology or mapping changes
+      ONTOP_CORS_ALLOWED_ORIGINS: "*"
+      ONTOP_LAZY_INIT: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./ontop/input:/opt/ontop/input
+      - ./ontop/jdbc:/opt/ontop/jdbc
+    restart: unless-stopped
+
+  # Local PostgreSQL with a sample retail warehouse, for testing without Redshift.
+  # Start with: docker compose --profile local up -d postgres
+  postgres:
+    image: postgres:16
+    container_name: ontodata-postgres
+    profiles: ["local"]
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ontodata
+      POSTGRES_PASSWORD: ontodata
+      POSTGRES_DB: retail
+    volumes:
+      - ./sample-data:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+
+  # Vector store: PostgreSQL with the pgvector extension.
+  # Start with: docker compose --profile vectors up -d pgvector
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: ontodata-pgvector
+    profiles: ["vectors"]
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ontodata
+      POSTGRES_PASSWORD: ontodata
+      POSTGRES_DB: vectors
+    volumes:
+      - pgvectordata:/var/lib/postgresql/data
+
+  # Graph store option: Neo4j, which receives the published ontology as a property graph.
+  # Start with: docker compose --profile graph up -d neo4j   (browser UI: http://localhost:7474)
+  neo4j:
+    image: neo4j:5.26
+    container_name: ontodata-neo4j
+    profiles: ["graph"]
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/ontodata-local
+    volumes:
+      - neo4jdata:/data
+
+volumes:
+  appdata:
+  neo4jdata:
+  pgdata:
+  pgvectordata:

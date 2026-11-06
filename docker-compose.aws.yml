@@ -1,0 +1,46 @@
+# Ontodata on one EC2 instance, against AWS services (Redshift, Neptune, S3 Vectors, RDS pgvector).
+# Only the app and Ontop run here; the databases are managed services. Guide: docs/deploy-ec2.md
+#   sh ontop/get-jdbc-drivers.sh
+#   docker compose -f docker-compose.aws.yml up -d --build
+services:
+  app:
+    build: .
+    # Set ONTODATA_IMAGE to an ECR image to pull instead of building on the instance.
+    image: ${ONTODATA_IMAGE:-ontodata-app:local}
+    container_name: ontodata-app
+    ports:
+      # Open port 4000 only to your own IP in the security group: the app has no sign-in yet.
+      - "4000:4000"
+    environment:
+      ONTOP_URL: http://ontop:8080
+      ONTOP_CONTAINER: ontodata-ontop
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      # AWS credentials come from the instance role (needs IMDS hop limit 2, see the guide).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - appdata:/data
+      - ./ontop/input:/ontop-input
+    depends_on:
+      - ontop
+    restart: unless-stopped
+
+  ontop:
+    image: ontop/ontop:5.4.0
+    container_name: ontodata-ontop
+    ports:
+      # Only the app needs Ontop; keep it off the network.
+      - "127.0.0.1:8080:8080"
+    environment:
+      ONTOP_ONTOLOGY_FILE: /opt/ontop/input/ontology.ttl
+      ONTOP_MAPPING_FILE: /opt/ontop/input/mapping.obda
+      ONTOP_PROPERTIES_FILE: /opt/ontop/input/redshift.properties
+      ONTOP_DEV_MODE: "true"
+      ONTOP_LAZY_INIT: "true"
+    volumes:
+      - ./ontop/input:/opt/ontop/input
+      - ./ontop/jdbc:/opt/ontop/jdbc
+    restart: unless-stopped
+
+volumes:
+  appdata:

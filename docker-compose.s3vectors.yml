@@ -1,0 +1,19 @@
+# Local stack with Amazon S3 Vectors as the vector store, instead of the pgvector container.
+#   npm run stack:s3vectors
+# which runs:
+#   docker compose -f docker-compose.yml -f docker-compose.s3vectors.yml --profile app --profile local up -d --build
+#
+# Needs an S3 vector bucket and an AWS profile allowed to use it (docs/getting-started.md).
+# Set S3VECTORS_BUCKET (and optionally AWS_PROFILE, S3VECTORS_REGION) in the .env file next to this one.
+services:
+  app:
+    environment:
+      VECTOR_STORE_PROVIDER: s3vectors
+      # S3 Vectors index names allow lowercase letters, digits, hyphens and dots.
+      VECTOR_INDEX_NAME: ontodata-schema
+      S3VECTORS_BUCKET: ${S3VECTORS_BUCKET:?Set S3VECTORS_BUCKET in .env to your S3 vector bucket name}
+      S3VECTORS_REGION: ${S3VECTORS_REGION:-us-east-1}
+      AWS_PROFILE: ${AWS_PROFILE:-ontodata}
+    volumes:
+      # Your AWS credentials and config, read-only. The app runs as the "node" user.
+      - ~/.aws:/home/node/.aws:ro
